@@ -1,0 +1,41 @@
+# /requirements.txt
+# パス: littlebuddha-dev/cogni-quantum2.1/Cogni-Quantum2.1-fa842ce68348b9b1bc6df85efc0bd97dd31c796e/requirements.txt
+# タイトル: requirements.txt with Pydantic for settings management
+# 役割: プロジェクトに必要なライブラリを定義する。設定管理のためにpydantic関連を追加。
+
+# CogniQuantum V2 Dependencies
+
+# Core Dependencies
+aiohttp>=3.8.0
+python-dotenv>=1.0.0
+numpy<2.0
+httpx>=0.24.0
+langdetect>=1.0.9 # For multi-language complexity detection
+pydantic>=2.0.0 # For data validation and settings
+pydantic-settings>=2.0.0 # For loading settings from .env files
+
+# Audio Processing (Optional)
+openai-whisper>=20231117
+
+# RAG Dependencies (New)
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.0  # or faiss-gpu for GPU support
+pypdf>=3.0.0     # For PDF document loading
+langchain>=0.1.0
+langchain-community>=0.0.20 # For document loaders, etc.
+langchain-huggingface>=0.0.3 # For new HuggingFaceEmbeddings
+beautifulsoup4>=4.9.0      # For HTML parsing
+wikipedia>=1.4.0          # For Wikipedia search
+
+# Development Dependencies (Optional)
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+mypy>=1.0.0
+
+# Documentation Dependencies (Optional)
+mkdocs>=1.4.0
+mkdocs-material>=8.0.0
+
+# For advanced NLP-based complexity analysis (optional)
+spacy>=3.0.0,<4.0.0

@@ -1,0 +1,30 @@
+# CogniQuantum V2 Test Questions by Complexity
+
+# === LOW COMPLEXITY (Efficient Mode) ===
+What is artificial intelligence?
+Calculate 15% of 847.
+What are the primary colors?
+Define machine learning in one sentence.
+
+# === MEDIUM COMPLEXITY (Balanced Mode) ===
+Compare deep learning and traditional machine learning approaches.
+Analyze the main causes of climate change and their interconnections.
+Explain quantum computing principles and current limitations.
+Evaluate the pros and cons of remote work policies.
+
+# === HIGH COMPLEXITY (Decomposed Mode) ===
+Design a comprehensive sustainable urban transportation system considering technical, economic, social, and environmental factors with implementation timeline.
+Develop an integrated strategy for quantum computing, AI, and climate change solutions for the 2030s, including policy recommendations and risk assessments.
+Analyze the philosophical, ethical, and practical implications of AI consciousness emergence, considering multiple stakeholder perspectives and long-term societal impacts.
+Create a framework for global governance of advanced AI systems that balances innovation, safety, and democratic values across different cultural contexts.
+
+# === ADAPTIVE COMPLEXITY (Auto-Detection) ===
+How might blockchain technology transform healthcare data management?
+What are the implications of gene editing for human evolution?
+Design an algorithm for optimizing renewable energy distribution.
+Analyze the economic impacts of automation on different industries.
+
+# === PAPER-OPTIMIZED (Maximum Research Integration) ===
+Reproduce and extend the Tower of Hanoi experiments from "The Illusion of Thinking" paper with N=10 disks.
+Analyze the limitations of current reasoning models and propose architectural improvements based on complexity science.
+Compare the performance of thinking vs non-thinking models across different problem types using controlled experimental conditions.
