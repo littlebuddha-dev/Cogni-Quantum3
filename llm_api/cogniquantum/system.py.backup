@@ -1,0 +1,402 @@
+# /llm_api/cogniquantum/system.py
+# タイトル: CogniQuantum System with Fully Consistent V2 Info Output (Temporary Fix)
+# 役割: pipelines インポートを一時的にコメントアウトして動作を修正
+
+import logging
+import json
+import re
+import asyncio
+from typing import Any, Dict, Optional, List
+import httpx
+
+from .analyzer import AdaptiveComplexityAnalyzer
+from .engine import EnhancedReasoningEngine
+from .enums import ComplexityRegime
+from .learner import ComplexityLearner
+from ..quantum_engine import QuantumReasoningEngine
+from .tracker import SolutionTracker, ReasoningMetrics
+from ..providers.base import LLMProvider
+from ..providers import get_provider
+from ..rag import RAGManager
+
+# 一時的にコメントアウト - Step 2で有効化
+# from .pipelines import AdaptivePipeline
+
+logger = logging.getLogger(__name__)
+
+class CogniQuantumSystemV2:
+    def __init__(self, provider: LLMProvider, base_model_kwargs: Dict[str, Any]):
+        logger.info("CogniQuantumシステムV2（自己改善機能付き）を初期化中")
+        if not provider:
+            raise ValueError("有効なLLMプロバイダーがCogniQuantumSystemV2に必要です。")
+        
+        self.learner = ComplexityLearner()
+        self.provider = provider
+        self.base_model_kwargs = base_model_kwargs
+        self.complexity_analyzer = AdaptiveComplexityAnalyzer(learner=self.learner)
+        self.reasoning_engine = EnhancedReasoningEngine(provider, base_model_kwargs, complexity_analyzer=self.complexity_analyzer)
+        self.quantum_engine = None
+        self.solution_tracker = SolutionTracker()
+        self.max_refinement_cycles = 1
+        self.max_adjustment_attempts = 2
+        logger.info("CogniQuantumシステムV2の初期化完了")
+    
+    async def solve_problem(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        force_regime: Optional[ComplexityRegime] = None,
+        use_rag: bool = False,
+        knowledge_base_path: Optional[str] = None,
+        use_wikipedia: bool = False,
+        real_time_adjustment: bool = True,
+        mode: str = 'adaptive'
+    ) -> Dict[str, Any]:
+        logger.info(f"問題解決プロセス開始（V2, モード: {mode}）: {prompt[:80]}...")
+        
+        def format_final_response(solution, thought_process, v2_improvements, success=True, error=None):
+            base_response = {
+                'success': success,
+                'final_solution': solution,
+                'image_url': None,
+                'thought_process': thought_process,
+                'v2_improvements': v2_improvements,
+                'version': 'v2',
+            }
+            if error:
+                base_response['error'] = error
+            return base_response
+
+        # 特別なパイプラインの処理
+        special_modes = {
+            'parallel': self._execute_parallel_pipelines,
+            'quantum_inspired': self._execute_quantum_inspired_pipeline,
+            'speculative_thought': self._execute_speculative_thought_pipeline
+        }
+        if mode in special_modes:
+            return await special_modes[mode](prompt, system_prompt, use_rag, knowledge_base_path, use_wikipedia)
+
+        # 通常の適応型パイプライン
+        is_edge_mode = (mode == 'edge')
+        if is_edge_mode:
+            logger.info("エッジデバイス最適化モードで実行。高度な機能は無効化。")
+            use_rag = False
+            use_wikipedia = False
+            real_time_adjustment = False
+            force_regime = ComplexityRegime.LOW
+
+        current_prompt = prompt
+        rag_source = None
+        if use_rag or use_wikipedia:
+            rag_manager = RAGManager(provider=self.provider, use_wikipedia=use_wikipedia, knowledge_base_path=knowledge_base_path)
+            current_prompt = await rag_manager.retrieve_and_augment(prompt)
+            rag_source = 'wikipedia' if use_wikipedia else 'knowledge_base'
+        
+        try:
+            complexity_score, current_regime = self.complexity_analyzer.analyze_complexity(current_prompt, mode=mode)
+            
+            if force_regime:
+                current_regime = force_regime
+                logger.info(f"レジームを '{current_regime.value}' に強制設定しました。")
+            
+            initial_regime = current_regime
+            final_reasoning_result = None
+            
+            for attempt in range(self.max_adjustment_attempts):
+                logger.info(f"推論試行 {attempt + 1}/{self.max_adjustment_attempts} (レジーム: {current_regime.value})")
+                reasoning_result = await self.reasoning_engine.execute_reasoning(current_prompt, system_prompt, complexity_score, current_regime)
+                final_reasoning_result = reasoning_result.copy()
+                if reasoning_result.get('error'): return format_final_response(None, None, None, success=False, error=reasoning_result['error'])
+                final_solution = reasoning_result.get('solution')
+                if force_regime or not real_time_adjustment or (attempt + 1) >= self.max_adjustment_attempts: break
+                evaluation = await self._self_evaluate_solution(final_solution, prompt, current_regime)
+                if evaluation.get("is_sufficient"):
+                    final_reasoning_result['self_evaluation'] = {'outcome': 'sufficient', 'reason': evaluation.get('reason')}
+                    break 
+                else:
+                    final_reasoning_result['self_evaluation'] = {'outcome': 'insufficient', 'reason': evaluation.get('reason'), 'next_regime': evaluation.get("next_regime").value}
+                    new_regime = evaluation.get("next_regime", current_regime)
+                    if new_regime != current_regime:
+                        logger.info(f"自己評価に基づき複雑性を再調整: {current_regime.value} -> {new_regime.value}")
+                        current_regime = new_regime
+                        current_prompt = f"前回の回答は不十分でした。より深く、包括的な分析を行ってください。\n元の質問: {prompt}\n前回の回答: {final_solution}\n"
+                    else:
+                        logger.info("同じ複雑性レジームが推奨されたため、調整を終了します。")
+                        break
+            
+            if real_time_adjustment and current_regime != initial_regime: self.learner.record_outcome(prompt, current_regime)
+            
+            final_solution = await self._evaluate_and_refine(final_reasoning_result['solution'], current_prompt, system_prompt, current_regime)
+            
+            thought_process = {
+                'complexity_score': complexity_score,
+                'initial_regime': initial_regime.value,
+                'decomposition': final_reasoning_result.get('decomposition'),
+                'sub_solutions': final_reasoning_result.get('sub_solutions'),
+                'self_evaluation': final_reasoning_result.get('self_evaluation'),
+            }
+            
+            v2_improvements = {
+                'regime': current_regime.value,
+                'reasoning_approach': final_reasoning_result.get('reasoning_approach'),
+                'overthinking_prevention': final_reasoning_result.get('overthinking_prevention', False),
+                'collapse_prevention': final_reasoning_result.get('collapse_prevention', False),
+                'rag_enabled': use_rag or use_wikipedia,
+                'rag_source': rag_source,
+                'real_time_adjustment_active': real_time_adjustment and not force_regime,
+                'learned_suggestion_used': self.learner.get_suggestion(prompt) is not None,
+                'is_edge_optimized': is_edge_mode,
+            }
+
+            return format_final_response(final_solution, thought_process, v2_improvements)
+
+        except Exception as e:
+            logger.error(f"問題解決中にエラーが発生しました（V2）: {e}", exc_info=True)
+            return format_final_response(None, None, None, success=False, error=str(e))
+
+    async def _self_evaluate_solution(self, solution: str, original_prompt: str, current_regime: ComplexityRegime) -> Dict[str, Any]:
+        if len(solution) < 150 and current_regime == ComplexityRegime.LOW:
+            return {"is_sufficient": False, "reason": "Solution may be too brief for the question.", "next_regime": ComplexityRegime.MEDIUM}
+        return {"is_sufficient": True, "reason": "Solution seems adequate."}
+
+    async def _execute_parallel_pipelines(self, prompt: str, system_prompt: str, use_rag: bool, knowledge_base_path: Optional[str], use_wikipedia: bool) -> Dict[str, Any]:
+        logger.info("並列推論パイプライン実行開始: efficient, balanced, decomposed")
+        final_prompt = prompt
+        rag_source = None
+        if use_rag or use_wikipedia:
+            rag_manager = RAGManager(provider=self.provider, use_wikipedia=use_wikipedia, knowledge_base_path=knowledge_base_path)
+            final_prompt = await rag_manager.retrieve_and_augment(prompt)
+            rag_source = 'wikipedia' if use_wikipedia else 'knowledge_base'
+        
+        tasks = [
+            self.reasoning_engine.execute_reasoning(final_prompt, system_prompt, regime=ComplexityRegime.LOW),
+            self.reasoning_engine.execute_reasoning(final_prompt, system_prompt, regime=ComplexityRegime.MEDIUM),
+            self.reasoning_engine.execute_reasoning(final_prompt, system_prompt, regime=ComplexityRegime.HIGH),
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        valid_solutions_details = [res for res in results if not isinstance(res, Exception) and not res.get('error')]
+        if not valid_solutions_details:
+            return {'success': False, 'error': "全ての並列パイプラインが失敗しました。", 'version': 'v2'}
+            
+        selection_details = await self._select_best_solution(valid_solutions_details, prompt)
+        best_solution_info = selection_details['best_solution']
+        final_solution = best_solution_info['solution']
+        
+        thought_process = {
+            'reasoning_approach': f"parallel_best_of_{len(valid_solutions_details)}",
+            'candidates_considered': len(valid_solutions_details),
+            'selected_regime': best_solution_info.get('complexity_regime'),
+            'selection_reason': selection_details.get('reason'),
+            'all_candidates': valid_solutions_details
+        }
+        
+        v2_improvements = {
+            'rag_enabled': use_rag or use_wikipedia,
+            'rag_source': rag_source,
+        }
+
+        return {
+            'success': True,
+            'final_solution': final_solution,
+            'image_url': None,
+            'thought_process': thought_process,
+            'v2_improvements': v2_improvements,
+            'version': 'v2'
+        }
+        
+    async def _execute_quantum_inspired_pipeline(self, prompt: str, system_prompt: str, use_rag: bool, knowledge_base_path: Optional[str], use_wikipedia: bool) -> Dict[str, Any]:
+        if self.quantum_engine is None:
+            self.quantum_engine = QuantumReasoningEngine(self.provider, self.base_model_kwargs)
+
+        logger.info("量子インスパイアード推論パイプラインを開始しました。")
+        final_prompt = prompt
+        rag_source = None
+        if use_rag or use_wikipedia:
+            rag_manager = RAGManager(provider=self.provider, use_wikipedia=use_wikipedia, knowledge_base_path=knowledge_base_path)
+            final_prompt = await rag_manager.retrieve_and_augment(prompt)
+            rag_source = 'wikipedia' if use_wikipedia else 'knowledge_base'
+        
+        reasoning_result = await self.quantum_engine.solve(final_prompt, system_prompt)
+        
+        if reasoning_result.get('error'):
+            return {'success': False, 'error': reasoning_result['error'], 'version': 'v2'}
+            
+        final_solution = reasoning_result.get('solution')
+
+        thought_process = {
+            'reasoning_approach': reasoning_result.get('reasoning_approach'),
+            'hypotheses_generated': reasoning_result.get('hypotheses_generated')
+        }
+        
+        v2_improvements = {
+            'rag_enabled': use_rag or use_wikipedia,
+            'rag_source': rag_source,
+        }
+        
+        return {
+            'success': True,
+            'final_solution': final_solution,
+            'image_url': None,
+            'thought_process': thought_process,
+            'v2_improvements': v2_improvements,
+            'version': 'v2'
+        }
+
+    async def _execute_speculative_thought_pipeline(self, prompt: str, system_prompt: str, use_rag: bool, knowledge_base_path: Optional[str], use_wikipedia: bool) -> Dict[str, Any]:
+        logger.info("思考レベルの投機的デコーディングパイプライン実行開始")
+
+        current_prompt = prompt
+        rag_source = None
+        if use_rag or use_wikipedia:
+            rag_manager = RAGManager(provider=self.provider, use_wikipedia=use_wikipedia, knowledge_base_path=knowledge_base_path)
+            current_prompt = await rag_manager.retrieve_and_augment(prompt)
+            rag_source = 'wikipedia' if use_wikipedia else 'knowledge_base'
+
+        draft_model_name = None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get("http://localhost:11434/api/tags")
+                response.raise_for_status()
+                available_models = [m['name'] for m in response.json().get('models', [])]
+            
+            lightweight_candidates = [
+                m for m in available_models 
+                if any(k in m.lower() for k in ['phi', 'gemma', '2b', '3b', '4b'])
+            ]
+            if lightweight_candidates:
+                draft_model_name = sorted(lightweight_candidates, key=len)[0]
+                logger.info(f"Ollamaからドラフト生成用の軽量モデルを自動選択しました: {draft_model_name}")
+
+        except Exception as e:
+            logger.warning(f"Ollamaから利用可能なモデルの取得に失敗しました: {e}。フォールバックします。")
+
+        if not draft_model_name:
+            logger.warning("適切な軽量モデルが見つかりませんでした。通常のbalancedモードにフォールバックします。")
+            return await self.reasoning_engine.execute_reasoning(current_prompt, system_prompt, regime=ComplexityRegime.MEDIUM)
+        
+        try:
+            draft_provider = get_provider('ollama', enhanced=False)
+            draft_model_kwargs = {'model': draft_model_name, 'temperature': 0.7}
+        except (ValueError, ImportError):
+            logger.error("Ollamaプロバイダーの取得に失敗しました。")
+            return await self.reasoning_engine.execute_reasoning(current_prompt, system_prompt, regime=ComplexityRegime.MEDIUM)
+
+        draft_prompt = f"以下の質問に対して、考えられる答えのドラフトを3つ、多様な視点から簡潔に生成してください。\n\n質問: {current_prompt}"
+        draft_response = await draft_provider.call(draft_prompt, "", **draft_model_kwargs)
+        
+        if draft_response.get('error'):
+            logger.error(f"ドラフト生成に失敗: {draft_response['error']}")
+            return {'success': False, 'error': f"ドラフト生成に失敗: {draft_response['error']}", 'version': 'v2'}
+        
+        drafts = draft_response.get('text', '')
+
+        verification_prompt = f"""以下の「元の質問」に対して、いくつかの「回答ドラフト」が提供されました。
+あなたは専門家として、これらのドラフトを評価・検証し、最も正確で包括的な最終回答を1つに統合してください。元の質問の意図を完全に満たすように、情報を取捨選択し、再構成してください。
+
+# 元の質問
+{current_prompt}
+
+# 回答ドラフト
+---
+{drafts}
+---
+
+# 統合・検証済みの最終回答
+"""
+        final_result = await self.provider.call(verification_prompt, system_prompt, **self.base_model_kwargs)
+
+        thought_process = {
+            'draft_generator': f"ollama/{draft_model_name}",
+            'verifier_integrator': self.provider.provider_name,
+            'drafts': drafts,
+        }
+        
+        v2_improvements = {
+            'regime': 'N/A (Speculative)',
+            'reasoning_approach': 'speculative_thought',
+            'speculative_execution_enabled': True,
+            'rag_enabled': use_rag or use_wikipedia,
+            'rag_source': rag_source
+        }
+
+        return {
+            'success': not final_result.get('error'),
+            'final_solution': final_result.get('text'),
+            'thought_process': thought_process,
+            'v2_improvements': v2_improvements,
+            'version': 'v2',
+            'error': final_result.get('error')
+        }
+
+    async def _select_best_solution(self, solutions: List[Dict[str, Any]], original_prompt: str) -> Dict[str, Any]:
+        if len(solutions) == 1:
+            return {'best_solution': solutions[0], 'reason': 'Only one valid solution generated.'}
+        solution_texts = [s.get('solution', '') for s in solutions]
+        selection_prompt = f"以下の「元の質問」に対して、複数の「回答案」が生成されました。\nそれぞれの回答案を慎重に評価し、最も高品質で、質問の意図を完全に満たすものを1つ選択してください。\n\n# 元の質問\n{original_prompt}\n\n# 回答案\n---\n"
+        for i, sol_text in enumerate(solution_texts):
+            selection_prompt += f"## 回答案 {i+1} ({solutions[i].get('complexity_regime')})\n{sol_text}\n\n---\n"
+        selection_prompt += "\n# あなたのタスク\n全ての回答案を比較検討し、最も優れている回答案の番号をJSON形式で出力してください。\n\n出力形式:\n{{\n  \"best_choice_index\": <選択した回答案のインデックス (0始まり)>,\n  \"reason\": \"その回答案が最も優れていると判断した簡潔な理由\"\n}}\n"
+        try:
+            eval_kwargs = self.base_model_kwargs.copy()
+            eval_kwargs['temperature'] = 0.0
+            response = await self.provider.call(selection_prompt, "You are an expert solution evaluator.", **eval_kwargs)
+            response_text = response.get('text', '{}').strip()
+            match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if not match:
+                logger.warning("最良解の選択応答からJSONを抽出できませんでした。最初の解を選択します。")
+                return {'best_solution': solutions[0], 'reason': 'Failed to parse selection JSON.'}
+            
+            parsed_json = json.loads(match.group(0))
+            best_index = parsed_json.get("best_choice_index", 0)
+            reason = parsed_json.get('reason', 'No reason provided.')
+            
+            if not isinstance(best_index, int) or not (0 <= best_index < len(solutions)):
+                logger.warning(f"無効なインデックス {best_index} が返されました。最初の解を選択します。")
+                return {'best_solution': solutions[0], 'reason': 'Invalid index returned from selection.'}
+            
+            logger.info(f"最良解としてインデックス {best_index} ({solutions[best_index].get('complexity_regime')}) が選択されました。理由: {reason}")
+            return {'best_solution': solutions[best_index], 'reason': reason}
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"最良解の選択中にエラー: {e}。最初の解を選択します。")
+            return {'best_solution': solutions[0], 'reason': f'Error during selection: {e}'}
+
+    async def _evaluate_and_refine(self, solution: str, original_prompt: str, system_prompt: str, regime: ComplexityRegime) -> str:
+        if regime == ComplexityRegime.LOW:
+            logger.info("低複雑性問題: refinementスキップ（overthinking防止）")
+            return solution
+        if regime in [ComplexityRegime.MEDIUM, ComplexityRegime.HIGH]:
+            return await self._perform_limited_refinement(solution, original_prompt, system_prompt)
+        return solution
+    
+    async def _perform_limited_refinement(self, solution: str, original_prompt: str, system_prompt: str) -> str:
+        logger.info("解の限定的改善プロセスを開始...")
+        refinement_prompt = f"""以下の「元の質問」に対する「回答案」です。
+内容をレビューし、以下の観点で改善してください。
+- 明確さ: より分かりやすい表現か？
+- 正確性: 事実誤認はないか？
+- 完全性: 重要な情報が欠けていないか？
+
+改善した最終版の回答のみを出力してください。自己評価や変更点の説明は不要です。
+
+# 元の質問
+{original_prompt}
+
+# 回答案
+---
+{solution}
+---
+
+# 改善された最終回答
+"""
+        response = await self.provider.call(refinement_prompt, system_prompt, **self.base_model_kwargs)
+        
+        if response.get('error'):
+            logger.warning(f"改善プロセス中にエラーが発生しました: {response['error']}。元の解を返します。")
+            return solution
+            
+        logger.info("解の改善が完了しました。")
+        return response.get('text', solution)
+    
+    def _collect_metrics(self, complexity_score: float, regime: ComplexityRegime, reasoning_result: Dict[str, Any]) -> ReasoningMetrics:
+        pass

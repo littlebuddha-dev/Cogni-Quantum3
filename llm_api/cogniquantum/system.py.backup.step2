@@ -1,0 +1,276 @@
+# /llm_api/cogniquantum/system.py
+# タイトル: CogniQuantum System V2 (Refactored)
+# 役割: パイプライン管理とコーディネーションに特化。具体的な処理は各パイプラインに委譲。
+
+import logging
+import json
+import re
+import asyncio
+from typing import Any, Dict, Optional, List
+import httpx
+
+from .enums import ComplexityRegime
+from .pipelines import AdaptivePipeline
+from ..providers.base import LLMProvider
+from ..providers import get_provider
+from ..quantum_engine import QuantumReasoningEngine
+from ..rag import RAGManager
+
+logger = logging.getLogger(__name__)
+
+class CogniQuantumSystemV2:
+    """CogniQuantum V2 メインシステム（リファクタリング版）"""
+    
+    def __init__(self, provider: LLMProvider, base_model_kwargs: Dict[str, Any]):
+        logger.info("CogniQuantumシステムV2（リファクタリング版）を初期化中")
+        if not provider:
+            raise ValueError("有効なLLMプロバイダーがCogniQuantumSystemV2に必要です。")
+        
+        self.provider = provider
+        self.base_model_kwargs = base_model_kwargs
+        
+        # パイプライン初期化
+        self.adaptive_pipeline = AdaptivePipeline(provider, base_model_kwargs)
+        
+        # 遅延初期化される他のコンポーネント
+        self.quantum_engine = None
+        
+        logger.info("CogniQuantumシステムV2の初期化完了")
+    
+    async def solve_problem(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        force_regime: Optional[ComplexityRegime] = None,
+        use_rag: bool = False,
+        knowledge_base_path: Optional[str] = None,
+        use_wikipedia: bool = False,
+        real_time_adjustment: bool = True,
+        mode: str = 'adaptive'
+    ) -> Dict[str, Any]:
+        """問題解決のメインエントリーポイント"""
+        logger.info(f"問題解決プロセス開始（V2リファクタリング版, モード: {mode}）: {prompt[:80]}...")
+        
+        # モード別のパイプライン選択
+        if mode in ['adaptive', 'efficient', 'balanced', 'decomposed', 'edge']:
+            # 適応型パイプラインで処理
+            return await self.adaptive_pipeline.execute(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                force_regime=force_regime,
+                use_rag=use_rag,
+                knowledge_base_path=knowledge_base_path,
+                use_wikipedia=use_wikipedia,
+                real_time_adjustment=real_time_adjustment,
+                mode=mode
+            )
+        
+        # 特殊パイプライン（まだ分離されていない）
+        elif mode == 'parallel':
+            return await self._execute_parallel_pipelines(prompt, system_prompt, use_rag, knowledge_base_path, use_wikipedia)
+        elif mode == 'quantum_inspired':
+            return await self._execute_quantum_inspired_pipeline(prompt, system_prompt, use_rag, knowledge_base_path, use_wikipedia)
+        elif mode == 'speculative_thought':
+            return await self._execute_speculative_thought_pipeline(prompt, system_prompt, use_rag, knowledge_base_path, use_wikipedia)
+        else:
+            # デフォルトは適応型パイプライン
+            logger.warning(f"未知のモード '{mode}' です。適応型パイプラインにフォールバックします。")
+            return await self.adaptive_pipeline.execute(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                force_regime=force_regime,
+                use_rag=use_rag,
+                knowledge_base_path=knowledge_base_path,
+                use_wikipedia=use_wikipedia,
+                real_time_adjustment=real_time_adjustment,
+                mode='adaptive'
+            )
+    
+    # 以下は今後対応するパイプラインクラスに移動予定
+    async def _execute_parallel_pipelines(self, prompt: str, system_prompt: str, use_rag: bool, knowledge_base_path: Optional[str], use_wikipedia: bool) -> Dict[str, Any]:
+        """並列パイプライン（暫定実装）"""
+        logger.info("並列推論パイプライン実行開始: efficient, balanced, decomposed")
+        
+        # RAG処理
+        final_prompt = prompt
+        rag_source = None
+        if use_rag or use_wikipedia:
+            rag_manager = RAGManager(provider=self.provider, use_wikipedia=use_wikipedia, knowledge_base_path=knowledge_base_path)
+            final_prompt = await rag_manager.retrieve_and_augment(prompt)
+            rag_source = 'wikipedia' if use_wikipedia else 'knowledge_base'
+        
+        # 3つの異なる複雑性レジームで並列実行
+        tasks = [
+            self.adaptive_pipeline.execute(final_prompt, system_prompt, force_regime=ComplexityRegime.LOW),
+            self.adaptive_pipeline.execute(final_prompt, system_prompt, force_regime=ComplexityRegime.MEDIUM),
+            self.adaptive_pipeline.execute(final_prompt, system_prompt, force_regime=ComplexityRegime.HIGH),
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 有効な結果をフィルタリング
+        valid_solutions = []
+        for res in results:
+            if not isinstance(res, Exception) and res.get('success') and not res.get('error'):
+                valid_solutions.append({
+                    'solution': res.get('final_solution'),
+                    'complexity_regime': res.get('v2_improvements', {}).get('regime'),
+                    'reasoning_approach': res.get('v2_improvements', {}).get('reasoning_approach')
+                })
+        
+        if not valid_solutions:
+            return {'success': False, 'error': "全ての並列パイプラインが失敗しました。", 'version': 'v2'}
+            
+        # 最良解選択（簡易版）
+        best_solution_info = valid_solutions[0]  # 暫定的に最初の解を選択
+        final_solution = best_solution_info['solution']
+        
+        thought_process = {
+            'reasoning_approach': f"parallel_best_of_{len(valid_solutions)}",
+            'candidates_considered': len(valid_solutions),
+            'selected_regime': best_solution_info.get('complexity_regime'),
+            'all_candidates': valid_solutions
+        }
+        
+        v2_improvements = {
+            'rag_enabled': use_rag or use_wikipedia,
+            'rag_source': rag_source,
+            'parallel_execution': True,
+        }
+
+        return {
+            'success': True,
+            'final_solution': final_solution,
+            'image_url': None,
+            'thought_process': thought_process,
+            'v2_improvements': v2_improvements,
+            'version': 'v2'
+        }
+        
+    async def _execute_quantum_inspired_pipeline(self, prompt: str, system_prompt: str, use_rag: bool, knowledge_base_path: Optional[str], use_wikipedia: bool) -> Dict[str, Any]:
+        """量子インスパイアードパイプライン（暫定実装）"""
+        if self.quantum_engine is None:
+            self.quantum_engine = QuantumReasoningEngine(self.provider, self.base_model_kwargs)
+
+        logger.info("量子インスパイアード推論パイプラインを開始しました。")
+        final_prompt = prompt
+        rag_source = None
+        if use_rag or use_wikipedia:
+            rag_manager = RAGManager(provider=self.provider, use_wikipedia=use_wikipedia, knowledge_base_path=knowledge_base_path)
+            final_prompt = await rag_manager.retrieve_and_augment(prompt)
+            rag_source = 'wikipedia' if use_wikipedia else 'knowledge_base'
+        
+        reasoning_result = await self.quantum_engine.solve(final_prompt, system_prompt)
+        
+        if reasoning_result.get('error'):
+            return {'success': False, 'error': reasoning_result['error'], 'version': 'v2'}
+            
+        final_solution = reasoning_result.get('solution')
+
+        thought_process = {
+            'reasoning_approach': reasoning_result.get('reasoning_approach'),
+            'hypotheses_generated': reasoning_result.get('hypotheses_generated')
+        }
+        
+        v2_improvements = {
+            'rag_enabled': use_rag or use_wikipedia,
+            'rag_source': rag_source,
+        }
+        
+        return {
+            'success': True,
+            'final_solution': final_solution,
+            'image_url': None,
+            'thought_process': thought_process,
+            'v2_improvements': v2_improvements,
+            'version': 'v2'
+        }
+
+    async def _execute_speculative_thought_pipeline(self, prompt: str, system_prompt: str, use_rag: bool, knowledge_base_path: Optional[str], use_wikipedia: bool) -> Dict[str, Any]:
+        """投機的思考パイプライン（暫定実装）"""
+        logger.info("思考レベルの投機的デコーディングパイプライン実行開始")
+
+        current_prompt = prompt
+        rag_source = None
+        if use_rag or use_wikipedia:
+            rag_manager = RAGManager(provider=self.provider, use_wikipedia=use_wikipedia, knowledge_base_path=knowledge_base_path)
+            current_prompt = await rag_manager.retrieve_and_augment(prompt)
+            rag_source = 'wikipedia' if use_wikipedia else 'knowledge_base'
+
+        # Ollamaから軽量モデルを取得
+        draft_model_name = None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get("http://localhost:11434/api/tags")
+                response.raise_for_status()
+                available_models = [m['name'] for m in response.json().get('models', [])]
+            
+            lightweight_candidates = [
+                m for m in available_models 
+                if any(k in m.lower() for k in ['phi', 'gemma', '2b', '3b', '4b'])
+            ]
+            if lightweight_candidates:
+                draft_model_name = sorted(lightweight_candidates, key=len)[0]
+                logger.info(f"Ollamaからドラフト生成用の軽量モデルを自動選択しました: {draft_model_name}")
+
+        except Exception as e:
+            logger.warning(f"Ollamaから利用可能なモデルの取得に失敗しました: {e}。フォールバックします。")
+
+        if not draft_model_name:
+            logger.warning("適切な軽量モデルが見つかりませんでした。適応型パイプラインにフォールバックします。")
+            return await self.adaptive_pipeline.execute(current_prompt, system_prompt, mode='balanced')
+        
+        # ドラフト生成
+        try:
+            draft_provider = get_provider('ollama', enhanced=False)
+            draft_model_kwargs = {'model': draft_model_name, 'temperature': 0.7}
+        except (ValueError, ImportError):
+            logger.error("Ollamaプロバイダーの取得に失敗しました。")
+            return await self.adaptive_pipeline.execute(current_prompt, system_prompt, mode='balanced')
+
+        draft_prompt = f"以下の質問に対して、考えられる答えのドラフトを3つ、多様な視点から簡潔に生成してください。\n\n質問: {current_prompt}"
+        draft_response = await draft_provider.call(draft_prompt, "", **draft_model_kwargs)
+        
+        if draft_response.get('error'):
+            logger.error(f"ドラフト生成に失敗: {draft_response['error']}")
+            return {'success': False, 'error': f"ドラフト生成に失敗: {draft_response['error']}", 'version': 'v2'}
+        
+        drafts = draft_response.get('text', '')
+
+        # 検証と統合
+        verification_prompt = f"""以下の「元の質問」に対して、いくつかの「回答ドラフト」が提供されました。
+あなたは専門家として、これらのドラフトを評価・検証し、最も正確で包括的な最終回答を1つに統合してください。元の質問の意図を完全に満たすように、情報を取捨選択し、再構成してください。
+
+# 元の質問
+{current_prompt}
+
+# 回答ドラフト
+---
+{drafts}
+---
+
+# 統合・検証済みの最終回答
+"""
+        final_result = await self.provider.call(verification_prompt, system_prompt, **self.base_model_kwargs)
+
+        thought_process = {
+            'draft_generator': f"ollama/{draft_model_name}",
+            'verifier_integrator': self.provider.provider_name,
+            'drafts': drafts,
+        }
+        
+        v2_improvements = {
+            'regime': 'N/A (Speculative)',
+            'reasoning_approach': 'speculative_thought',
+            'speculative_execution_enabled': True,
+            'rag_enabled': use_rag or use_wikipedia,
+            'rag_source': rag_source
+        }
+
+        return {
+            'success': not final_result.get('error'),
+            'final_solution': final_result.get('text'),
+            'thought_process': thought_process,
+            'v2_improvements': v2_improvements,
+            'version': 'v2',
+            'error': final_result.get('error')
+        }

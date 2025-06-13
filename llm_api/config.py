@@ -24,8 +24,9 @@ class Settings(BaseSettings):
 
     # --- Provider Defaults ---
     OLLAMA_API_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_TIMEOUT: float = 600.0
-    OLLAMA_CONCURRENCY_LIMIT: int = 1
+    OLLAMA_TIMEOUT: float = 1200.0
+    OLLAMA_MAX_RETRIES: int = 3
+    OLLAMA_BACKOFF_FACTOR: float = 2.0
     
     # --- Llama.cpp Server Settings ---
     LLAMACPP_API_BASE_URL: Optional[str] = "http://localhost:8000"
