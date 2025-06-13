@@ -1,23 +1,23 @@
 # /llm_api/rag/manager.py
-# パス: littlebuddha-dev/cogni-quantum2.1/Cogni-Quantum2.1-fb17e3467b051803511a1506de5e02910bbae07e/llm_api/rag/manager.py
-# タイトル: RAG Manager with Smart Query Extraction
-# 役割: RAGプロセスを管理する。LLMを使い、プロンプトから最適な検索クエリを抽出する機能を追加。
+# タイトル: RAG Manager with Robust Query Extraction
+# 役割: RAGプロセスを管理する。LLMから検索クエリを抽出するプロンプトを強化し、出力のサニタイズ処理を追加する。
 
 import logging
+import re # reモジュールをインポート
 from typing import Optional
 
 from .knowledge_base import KnowledgeBase
 from .retriever import Retriever
 from langchain_community.document_loaders import WikipediaLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from ..providers.base import LLMProvider # LLMProviderをインポート
+from ..providers.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
 class RAGManager:
     """RAGプロセスを管理するクラス"""
     def __init__(self,
-                 provider: LLMProvider, # providerを受け取るように変更
+                 provider: LLMProvider,
                  use_wikipedia: bool = False,
                  knowledge_base_path: Optional[str] = None):
         
@@ -26,19 +26,38 @@ class RAGManager:
         self.knowledge_base_path = knowledge_base_path
         self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 
+    # ★★★ このメソッドを修正 ★★★
     async def _extract_search_query(self, prompt: str) -> str:
-        """LLMを使ってプロンプトから検索クエリを抽出する"""
-        extraction_prompt = f"""以下のユーザーの質問から、Wikipediaで検索するのに最も適した、簡潔なキーワードまたは固有表現を1つだけ抽出してください。
+        """LLMを使ってプロンプトから検索クエリを抽出し、サニタイズする"""
+        # プロンプトをより厳格に修正
+        extraction_prompt = f"""以下のユーザーの質問から、Wikipediaで検索するのに最適な「検索キーワード」だけを抽出してください。
+説明や前置き、句読点などは一切含めず、キーワードのみを返してください。複数のキーワードはスペースで区切ってください。
 
+例：
+質問：「Llama.cppのvLLMとの違いは？」
+出力：「Llama.cpp vLLM」
+
+質問：「日本の首都はどこですか？」
+出力：「東京」
+
+---
 質問: "{prompt}"
-
-検索キーワード:"""
+---
+出力："""
         try:
             # 検索クエリ抽出のためにLLMを呼び出す
             response = await self.provider.call(extraction_prompt, "")
+            
             # LLMの応答からキーワードをクリーンアップして抽出
-            query = response.get('text', prompt).strip().replace("「", "").replace("」", "").replace("\"", "")
-            logger.info(f"抽出されたWikipedia検索クエリ: '{query}'")
+            query = response.get('text', prompt).strip()
+            
+            # 万が一、LLMが余計なテキストを返した場合に備えて後処理を追加
+            # 「出力：」や「検索キーワード：」のような接頭辞を削除
+            query = re.sub(r'^(出力|検索キーワード)[:：\s]*', '', query).strip()
+            # クォーテーションを削除
+            query = query.replace("「", "").replace("」", "").replace("\"", "").replace("'", "")
+
+            logger.info(f"抽出・サニタイズされたWikipedia検索クエリ: '{query}'")
             return query
         except Exception as e:
             logger.error(f"検索クエリの抽出中にエラー: {e}")

@@ -1,6 +1,6 @@
 # /llm_api/config.py
-# タイトル: Centralized Settings Management for Maximum Stability
-# 役割: Ollamaの同時実行数制限を1に設定し、処理を逐次化してサーバーのクラッシュを完全に防ぐ。
+# タイトル: Centralized Settings Management (Llama 3.1 Model Update)
+# 役割: プロジェクト全体の設定を管理する。Llama.cppのデフォルトモデルパスをLlama 3.1のものに更新する。
 
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,10 +24,14 @@ class Settings(BaseSettings):
     # --- Provider Defaults ---
     OLLAMA_API_BASE_URL: str = "http://localhost:11434"
     OLLAMA_TIMEOUT: float = 600.0
-    
-    # ★★★ 修正箇所 ★★★
-    # Ollamaへの同時リクエスト数の上限を1に設定し、処理を逐次化する
     OLLAMA_CONCURRENCY_LIMIT: int = 1
+    
+    # --- Llama.cpp Server Settings ---
+    LLAMACPP_API_BASE_URL: Optional[str] = "http://localhost:8000"
+    
+    # ★★★ 変更箇所 ★★★
+    # Llama.cppサーバーでロードするGGUF形式のモデルへのローカルパスを更新
+    LLAMACPP_DEFAULT_MODEL_PATH: Optional[str] = "./models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
 
     # --- Default Models ---
     OPENAI_DEFAULT_MODEL: str = "gpt-4o-mini"
