@@ -1,6 +1,6 @@
 # /test_all_v2_providers.py
-# タイトル: 全V2プロバイダーの総合テストスクリプト (修正版)
-# 役割: 存在しない関数の呼び出しを修正し、実際に利用可能な関数を使ってプロバイダーの動作確認と性能測定を行う。
+# タイトル: 全V2プロバイダーの総合テストスクリプト (現在の実装対応版)
+# 役割: 現在のプロジェクト構造に合わせて修正されたプロバイダーの動作確認と性能測定を行う。
 
 import asyncio
 import json
@@ -17,14 +17,15 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # dotenvを先に読み込む
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("python-dotenvがインストールされていません。環境変数の読み込みをスキップします。")
 
 # 他のモジュールをインポート
-from cli.handler import CogniQuantumCLIV2Fixed # ヘルスチェック機能を持つCLIハンドラ
 from llm_api.providers import get_provider, list_providers, list_enhanced_providers, check_provider_health
 from llm_api.config import settings
-
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -37,8 +38,7 @@ class V2ProviderTester:
         # 利用可能なプロバイダーを動的に設定
         self.available_providers = self._get_available_providers()
         self.providers_to_test = providers_to_test or self.available_providers
-        self.v2_modes = modes_to_test or ['efficient', 'balanced', 'decomposed', 'adaptive', 'paper_optimized', 'parallel', 'quantum_inspired', 'edge']
-        self.cli_handler = CogniQuantumCLIV2Fixed()
+        self.v2_modes = modes_to_test or ['efficient', 'balanced', 'decomposed', 'adaptive', 'parallel', 'quantum_inspired', 'edge', 'speculative_thought']
 
     def _get_available_providers(self) -> List[str]:
         """APIキーが設定されているなど、利用可能なプロバイダーのリストを取得する"""
@@ -46,16 +46,42 @@ class V2ProviderTester:
         all_providers = list_providers()
         
         # APIキーの存在チェック
-        if settings.OPENAI_API_KEY: available.append('openai')
-        if settings.CLAUDE_API_KEY: available.append('claude')
-        if settings.GEMINI_API_KEY: available.append('gemini')
-        if settings.HF_TOKEN: available.append('huggingface')
+        if settings.OPENAI_API_KEY and 'openai' in all_providers: 
+            available.append('openai')
+        if settings.CLAUDE_API_KEY and 'claude' in all_providers: 
+            available.append('claude')
+        if settings.GEMINI_API_KEY and 'gemini' in all_providers: 
+            available.append('gemini')
+        if settings.HF_TOKEN and 'huggingface' in all_providers: 
+            available.append('huggingface')
         
-        # Ollamaは常にチェック対象とする
+        # Ollamaは常にチェック対象とする（ローカルで動作）
         if 'ollama' in all_providers:
             available.append('ollama')
             
+        # LlamaCppもローカルで動作する可能性がある
+        if 'llamacpp' in all_providers:
+            available.append('llamacpp')
+            
         return list(set(available))
+
+    async def check_ollama_connection(self) -> tuple[bool, List[str]]:
+        """Ollamaサーバーの接続確認とモデル一覧取得"""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                try:
+                    response = await client.get("http://localhost:11434/api/tags")
+                    if response.status_code == 200:
+                        data = response.json()
+                        models = [model['name'] for model in data.get('models', [])]
+                        return True, models
+                    else:
+                        return False, []
+                except Exception:
+                    return False, []
+        except ImportError:
+            return False, []
 
     async def run_comprehensive_tests(self):
         """総合テストの実行"""
@@ -73,14 +99,25 @@ class V2ProviderTester:
     async def collect_system_info(self):
         """システム情報の収集"""
         print("\n📊 システム情報を収集中...")
+        
+        # Ollama接続チェック
+        ollama_connected, ollama_models = await self.check_ollama_connection()
+        
         self.test_results['system_info'] = {
             'timestamp': time.time(),
             'python_version': sys.version,
             'working_directory': str(project_root),
             'standard_providers': list_providers(),
             'enhanced_providers': list_enhanced_providers(),
+            'ollama_connected': ollama_connected,
+            'ollama_models': ollama_models,
+            'available_providers': self.available_providers,
         }
         print("✅ システム情報収集完了")
+        if ollama_connected:
+            print(f"🦙 Ollama接続: ✅ ({len(ollama_models)}モデル利用可能)")
+        else:
+            print("🦙 Ollama接続: ❌")
 
     async def check_all_providers_health(self):
         """全プロバイダーの健全性チェック"""
@@ -91,18 +128,34 @@ class V2ProviderTester:
 
         for provider_name in list_providers():
             health_results['providers'][provider_name] = {}
+            
             # 標準プロバイダーのチェック
-            std_health = check_provider_health(provider_name, enhanced=False)
-            health_results['providers'][provider_name]['standard'] = std_health
-            if std_health['available']:
-                available_count += 1
+            try:
+                std_health = check_provider_health(provider_name, enhanced=False)
+                health_results['providers'][provider_name]['standard'] = std_health
+                if std_health['available']:
+                    available_count += 1
+                    print(f"   ✅ {provider_name} (標準)")
+                else:
+                    print(f"   ❌ {provider_name} (標準): {std_health['reason']}")
+            except Exception as e:
+                health_results['providers'][provider_name]['standard'] = {'available': False, 'reason': str(e)}
+                print(f"   ⚠️ {provider_name} (標準): エラー {e}")
                 
             # V2拡張プロバイダーのチェック
-            if provider_name in list_enhanced_providers()['v2']:
-                enh_health = check_provider_health(provider_name, enhanced=True)
-                health_results['providers'][provider_name]['enhanced_v2'] = enh_health
-                if enh_health['available']:
-                    enhanced_v2_count += 1
+            enhanced_v2_providers = list_enhanced_providers().get('v2', [])
+            if provider_name in enhanced_v2_providers:
+                try:
+                    enh_health = check_provider_health(provider_name, enhanced=True)
+                    health_results['providers'][provider_name]['enhanced_v2'] = enh_health
+                    if enh_health['available']:
+                        enhanced_v2_count += 1
+                        print(f"   ✅ {provider_name} (V2拡張)")
+                    else:
+                        print(f"   ❌ {provider_name} (V2拡張): {enh_health['reason']}")
+                except Exception as e:
+                    health_results['providers'][provider_name]['enhanced_v2'] = {'available': False, 'reason': str(e)}
+                    print(f"   ⚠️ {provider_name} (V2拡張): エラー {e}")
         
         health_results['summary'] = {
             'total_checked': len(list_providers()),
@@ -117,12 +170,29 @@ class V2ProviderTester:
         print("\n🧪 V2機能テスト中...")
         self.test_results['v2_features'] = {}
         
+        enhanced_v2_providers = list_enhanced_providers().get('v2', [])
+        
         for provider_name in self.providers_to_test:
-            if provider_name not in list_enhanced_providers()['v2']:
+            if provider_name not in enhanced_v2_providers:
+                print(f"⚠️ {provider_name}: V2拡張が利用できません。スキップします。")
                 continue
 
             print(f"\n🔍 {provider_name} V2機能テスト開始...")
             provider_results: Dict[str, Any] = {'modes_tested': {}, 'errors': []}
+            
+            # Ollamaの場合は接続チェック
+            if provider_name == 'ollama':
+                ollama_ok, models = await self.check_ollama_connection()
+                if not ollama_ok:
+                    print(f"   ❌ Ollamaサーバーに接続できません。スキップします。")
+                    provider_results['errors'].append("Ollamaサーバー接続失敗")
+                    self.test_results['v2_features'][provider_name] = provider_results
+                    continue
+                elif not models:
+                    print(f"   ❌ Ollamaにモデルがありません。スキップします。")
+                    provider_results['errors'].append("Ollamaモデル不在")
+                    self.test_results['v2_features'][provider_name] = provider_results
+                    continue
             
             for mode in self.v2_modes:
                 try:
@@ -130,9 +200,13 @@ class V2ProviderTester:
                     provider_results['modes_tested'][mode] = result
                     status = "✅ 成功" if result['success'] else f"❌ 失敗: {result.get('error', '不明')}"
                     print(f"   - {mode}モード: {status}")
+                    
+                    # 少し待機してサーバーに負荷をかけすぎないようにする
+                    await asyncio.sleep(0.5)
+                    
                 except Exception as e:
                     provider_results['errors'].append(f"{mode}モードテスト中にエラー: {e}")
-                    print(f"   - {mode}モード: ⚠️  エラー ({e})")
+                    print(f"   - {mode}モード: ⚠️ エラー ({e})")
             
             self.test_results['v2_features'][provider_name] = provider_results
 
@@ -143,10 +217,10 @@ class V2ProviderTester:
             'balanced': "機械学習とは何かを簡潔に説明して。",
             'decomposed': "持続可能な都市交通システムの設計案を考えて。",
             'adaptive': "太陽光発電のメリットとデメリットは？",
-            'paper_optimized': "AIの倫理について論じて。",
             'parallel': "量子コンピュータの将来性について。",
             'quantum_inspired': "意識の謎について、複数の視点から考察して。",
-            'edge': "色を混ぜるとどうなる？"
+            'edge': "色を混ぜるとどうなる？",
+            'speculative_thought': "AIの未来について思考実験してください。"
         }
         prompt = prompts.get(mode, "一般的なテストプロンプトです。")
         
@@ -154,7 +228,17 @@ class V2ProviderTester:
             # V2拡張プロバイダーを直接取得
             provider = get_provider(provider_name, enhanced=True)
             start_time = time.time()
-            response = await provider.call(prompt, mode=mode, force_v2=True)
+            
+            # モデル選択（Ollamaの場合）
+            call_kwargs = {'mode': mode}
+            if provider_name == 'ollama':
+                # 利用可能なモデルを取得
+                _, models = await self.check_ollama_connection()
+                if models:
+                    # 最初のモデルを使用
+                    call_kwargs['model'] = models[0]
+            
+            response = await provider.call(prompt, **call_kwargs)
             execution_time = time.time() - start_time
             
             return {
@@ -164,6 +248,7 @@ class V2ProviderTester:
                 'execution_time': execution_time,
                 'version': response.get('version'),
                 'v2_improvements': response.get('paper_based_improvements', {}),
+                'model_used': call_kwargs.get('model', 'default'),
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}
@@ -171,10 +256,58 @@ class V2ProviderTester:
     async def run_performance_tests(self):
         """パフォーマンステスト"""
         print("\n⚡ パフォーマンステスト中...")
-        self.test_results['performance'] = {}
-        # この機能は簡略化のため、今回は実行しない
-        print("   (パフォーマンステストは今回はスキップします)")
-
+        
+        # 簡単なパフォーマンステストを実行
+        performance_results = {}
+        
+        # 各プロバイダーで同じプロンプトの実行時間を測定
+        test_prompt = "Pythonとは何ですか？簡潔に説明してください。"
+        
+        for provider_name in self.providers_to_test:
+            if provider_name not in list_enhanced_providers().get('v2', []):
+                continue
+                
+            # Ollamaの接続確認
+            if provider_name == 'ollama':
+                ollama_ok, models = await self.check_ollama_connection()
+                if not ollama_ok or not models:
+                    continue
+            
+            try:
+                provider = get_provider(provider_name, enhanced=True)
+                
+                # 3回実行して平均時間を計測
+                times = []
+                for i in range(3):
+                    start_time = time.time()
+                    call_kwargs = {'mode': 'balanced'}
+                    if provider_name == 'ollama':
+                        _, models = await self.check_ollama_connection()
+                        if models:
+                            call_kwargs['model'] = models[0]
+                    
+                    response = await provider.call(test_prompt, **call_kwargs)
+                    execution_time = time.time() - start_time
+                    
+                    if not response.get('error'):
+                        times.append(execution_time)
+                    
+                    await asyncio.sleep(1)  # 1秒待機
+                
+                if times:
+                    performance_results[provider_name] = {
+                        'avg_time': sum(times) / len(times),
+                        'min_time': min(times),
+                        'max_time': max(times),
+                        'runs': len(times)
+                    }
+                    print(f"   {provider_name}: 平均 {performance_results[provider_name]['avg_time']:.2f}秒")
+                
+            except Exception as e:
+                print(f"   {provider_name}: パフォーマンステストエラー ({e})")
+        
+        self.test_results['performance'] = performance_results
+        print("✅ パフォーマンステスト完了")
 
     def generate_report(self):
         """最終レポートの生成"""
@@ -185,14 +318,27 @@ class V2ProviderTester:
         # サマリー表示
         health_summary = self.test_results.get('health_check', {}).get('summary', {})
         print(f"\n🏥 健全性: {health_summary.get('available', 0)}/{health_summary.get('total_checked', 0)} のプロバイダーが利用可能")
-        print(f"   - V2拡張: {health_summary.get('enhanced_v2', 0)}/{len(list_enhanced_providers()['v2'])} が利用可能")
+        print(f"   - V2拡張: {health_summary.get('enhanced_v2', 0)}/{len(list_enhanced_providers().get('v2', []))} が利用可能")
         
         v2_features = self.test_results.get('v2_features', {})
         if v2_features:
             print("\n🧪 V2機能テスト結果:")
             for provider, results in v2_features.items():
                 success_count = sum(1 for res in results['modes_tested'].values() if res['success'])
-                print(f"   - {provider}: {success_count}/{len(results['modes_tested'])} モード成功")
+                total_modes = len(results['modes_tested'])
+                print(f"   - {provider}: {success_count}/{total_modes} モード成功")
+                
+                # エラーがあれば表示
+                if results.get('errors'):
+                    for error in results['errors']:
+                        print(f"     ⚠️ {error}")
+
+        # パフォーマンステスト結果
+        performance = self.test_results.get('performance', {})
+        if performance:
+            print("\n⚡ パフォーマンステスト結果:")
+            for provider, perf_data in performance.items():
+                print(f"   - {provider}: 平均応答時間 {perf_data['avg_time']:.2f}秒")
 
         self.save_json_report()
 
@@ -201,7 +347,7 @@ class V2ProviderTester:
         try:
             report_file = project_root / "v2_test_report.json"
             with open(report_file, 'w', encoding='utf-8') as f:
-                json.dump(self.test_results, f, indent=2, ensure_ascii=False)
+                json.dump(self.test_results, f, indent=2, ensure_ascii=False, default=str)
             print(f"\n💾 詳細レポートを '{report_file}' に保存しました。")
         except Exception as e:
             print(f"\n❌ レポートの保存に失敗しました: {e}")
@@ -212,9 +358,19 @@ async def main():
     parser = argparse.ArgumentParser(description="CogniQuantum V2プロバイダー総合テスト")
     parser.add_argument("--providers", nargs='+', help="テストするプロバイダーを指定 (例: openai ollama)")
     parser.add_argument("--modes", nargs='+', help="テストするモードを指定 (例: efficient balanced)")
+    parser.add_argument("--skip-performance", action="store_true", help="パフォーマンステストをスキップ")
     args = parser.parse_args()
     
     tester = V2ProviderTester(providers_to_test=args.providers, modes_to_test=args.modes)
+    
+    if args.skip_performance:
+        # パフォーマンステストをスキップする簡易版
+        original_run_performance_tests = tester.run_performance_tests
+        async def skip_performance():
+            print("\n⚡ パフォーマンステスト: スキップされました")
+            tester.test_results['performance'] = {}
+        tester.run_performance_tests = skip_performance
+    
     await tester.run_comprehensive_tests()
 
 if __name__ == "__main__":

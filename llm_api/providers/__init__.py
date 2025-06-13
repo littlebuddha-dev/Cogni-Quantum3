@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # プロバイダーを格納するグローバル辞書
 standard_providers: Dict[str, Type[LLMProvider]] = {}
-enhanced_providers: Dict[str, set] = {"v1": set(), "v2": set(), "all": set()}
+enhanced_providers: Dict[str, set] = {"v2": set(), "all": set()}
 _initialized = False
 
 def _initialize_providers():
@@ -32,12 +32,18 @@ def _initialize_providers():
         if name.startswith('enhanced_') or name == 'base':
             continue
         
-        module = importlib.import_module(f".{name}", package=__name__)
-        for _, obj in inspect.getmembers(module, inspect.isclass):
-            if issubclass(obj, LLMProvider) and obj is not LLMProvider and obj is not EnhancedLLMProvider:
-                provider_name = name.lower()
-                standard_providers[provider_name] = obj
-                logger.debug(f"標準プロバイダー '{provider_name}' を登録: {obj.__name__}")
+        try:
+            module = importlib.import_module(f".{name}", package=__name__)
+            for _, obj in inspect.getmembers(module, inspect.isclass):
+                if (issubclass(obj, LLMProvider) and 
+                    obj is not LLMProvider and 
+                    obj is not EnhancedLLMProvider and
+                    not obj.__name__.startswith('Enhanced')):
+                    provider_name = name.lower()
+                    standard_providers[provider_name] = obj
+                    logger.debug(f"標準プロバイダー '{provider_name}' を登録: {obj.__name__}")
+        except Exception as e:
+            logger.warning(f"プロバイダーモジュール '{name}' のロードに失敗: {e}")
 
     # 拡張プロバイダーのロード (V2のみ)
     for _, name, _ in pkgutil.iter_modules([package_path]):
@@ -50,8 +56,8 @@ def _initialize_providers():
 
     _initialized = True
     logger.info("プロバイダーモジュール初期化完了")
-    logger.info(f"標準プロバイダー: {len(standard_providers)} 個")
-    logger.info(f"拡張プロバイダー V2: {len(enhanced_providers['v2'])} 個")
+    logger.info(f"標準プロバイダー: {sorted(standard_providers.keys())}")
+    logger.info(f"拡張プロバイダー V2: {sorted(enhanced_providers['v2'])}")
 
 
 def list_providers() -> List[str]:
@@ -85,7 +91,8 @@ def get_provider(name: str, enhanced: bool = False) -> LLMProvider:
 def _get_standard_provider_class(name: str):
     """標準プロバイダークラスを取得する。"""
     if name not in standard_providers:
-        raise ValueError(f"標準プロバイダー '{name}' が見つかりません。利用可能: {list(standard_providers.keys())}")
+        available = list(standard_providers.keys())
+        raise ValueError(f"標準プロバイダー '{name}' が見つかりません。利用可能: {available}")
     return standard_providers[name]
 
 def _get_enhanced_provider_class(name: str):

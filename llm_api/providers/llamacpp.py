@@ -1,5 +1,5 @@
 # /llm_api/providers/llamacpp.py
-# タイトル: Llama.cpp Standard Provider
+# タイトル: Llama.cpp Standard Provider (Complete)
 # 役割: llama-cpp-pythonのOpenAI互換サーバーと直接対話するための標準プロバイダー。
 
 import logging
@@ -16,14 +16,14 @@ class LlamaCppProvider(LLMProvider):
     llama-cpp-pythonのOpenAI互換サーバーと対話するための標準プロバイダー
     """
     def __init__(self):
-        if not all([settings.LLAMACPP_API_BASE_URL, settings.LLAMACPP_DEFAULT_MODEL_PATH]):
-            raise ValueError("Llama.cppの設定（LLAMACPP_API_BASE_URL, LLAMACPP_DEFAULT_MODEL_PATH）が.envファイルに必要です。")
+        if not settings.LLAMACPP_API_BASE_URL:
+            raise ValueError("LLAMACPP_API_BASE_URLが.envファイルに設定されていません。")
         
         self.api_url = f"{settings.LLAMACPP_API_BASE_URL.rstrip('/')}/v1/chat/completions"
-        self.default_model = settings.LLAMACPP_DEFAULT_MODEL_PATH
+        self.default_model = settings.LLAMACPP_DEFAULT_MODEL_PATH or "llama-model"
         self.client = httpx.AsyncClient(timeout=600.0)
         super().__init__()
-        logger.info(f"LlamaCpp provider initialized with API URL: {self.api_url} and default model: {self.default_model}")
+        logger.info(f"LlamaCpp provider initialized with API URL: {self.api_url}")
 
     def get_capabilities(self) -> Dict[ProviderCapability, bool]:
         """このプロバイダーのケイパビリティを返す。"""
@@ -47,12 +47,18 @@ class LlamaCppProvider(LLMProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # llama-cpp-pythonサーバーはmodel引数を必要としない
+        # llama-cpp-pythonサーバーはmodel引数を必要としない場合が多い
         payload = {
             "messages": messages,
             "temperature": kwargs.get("temperature", 0.7),
             "max_tokens": kwargs.get("max_tokens", 4096),
+            "stream": False,
         }
+
+        # top_pやtop_kがあれば追加
+        for param in ['top_p', 'top_k', 'repeat_penalty']:
+            if param in kwargs:
+                payload[param] = kwargs[param]
 
         try:
             response = await self.client.post(self.api_url, json=payload)
@@ -73,9 +79,25 @@ class LlamaCppProvider(LLMProvider):
                 "error": None,
             }
         except httpx.HTTPStatusError as e:
-            error_msg = f"Llama.cpp API HTTPエラー: {e.response.status_code} - {e.response.text}"
+            error_msg = f"Llama.cpp API HTTPエラー: {e.response.status_code}"
+            try:
+                error_detail = e.response.text
+                error_msg += f" - {error_detail}"
+            except:
+                pass
+            logger.error(error_msg)
+            return {"text": "", "error": error_msg}
+        except httpx.RequestError as e:
+            error_msg = f"Llama.cpp API接続エラー: {e}"
             logger.error(error_msg)
             return {"text": "", "error": error_msg}
         except Exception as e:
-            logger.error(f"Llama.cpp API呼び出し中にエラー: {e}", exc_info=True)
-            return {"text": "", "error": str(e)}
+            error_msg = f"Llama.cpp API呼び出し中にエラー: {e}"
+            logger.error(error_msg, exc_info=True)
+            return {"text": "", "error": error_msg}
+            
+    async def __aenter__(self):
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.client.aclose()

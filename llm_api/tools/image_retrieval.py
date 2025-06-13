@@ -1,14 +1,14 @@
 # /llm_api/tools/image_retrieval.py
 # タイトル: Image Retrieval Tool (Corrected)
-# 役割: SerpApiを利用して画像を検索する。インポート文とクラス名をライブラリの仕様に合わせて修正済み。
+# 役割: SerpApiを利用して画像を検索する。インポート文を正しい形式に修正済み。
 
 import logging
 import os
 from typing import NamedTuple, Optional
 
-from serpapi.Google Search_results import GoogleSearchResults
+# SerpApiの正しいインポート文に修正
+from serpapi import GoogleSearch
 from ..config import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def search(query: str) -> Optional[ImageResult]:
     }
 
     try:
-        search_client = GoogleSearchResults(params)
+        search_client = GoogleSearch(params)
         results = search_client.get_dict()
         
         image_results = results.get("images_results")
@@ -44,10 +44,10 @@ def search(query: str) -> Optional[ImageResult]:
         
         top_result = image_results[0]
         return ImageResult(
-            title=top_result.get("title"),
-            source=top_result.get("source"),
-            content_url=top_result.get("original"),
-            thumbnail_url=top_result.get("thumbnail"),
+            title=top_result.get("title", ""),
+            source=top_result.get("source", ""),
+            content_url=top_result.get("original", ""),
+            thumbnail_url=top_result.get("thumbnail", ""),
         )
     except Exception as e:
         logger.error(f"SerpApi経由の画像検索に失敗しました: {e}", exc_info=True)
