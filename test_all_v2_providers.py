@@ -45,22 +45,24 @@ class V2ProviderTester:
         available = []
         all_providers = list_providers()
         
-        # APIキーの存在チェック
-        if settings.OPENAI_API_KEY and 'openai' in all_providers: 
-            available.append('openai')
-        if settings.CLAUDE_API_KEY and 'claude' in all_providers: 
-            available.append('claude')
-        if settings.GEMINI_API_KEY and 'gemini' in all_providers: 
-            available.append('gemini')
-        if settings.HF_TOKEN and 'huggingface' in all_providers: 
-            available.append('huggingface')
+        # APIキーの存在と有効性をチェック
+        api_key_checks = {
+            'openai': settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.startswith('sk-') and len(settings.OPENAI_API_KEY) > 20,
+            'claude': settings.CLAUDE_API_KEY and settings.CLAUDE_API_KEY.startswith('sk-ant-') and len(settings.CLAUDE_API_KEY) > 20,
+            'gemini': settings.GEMINI_API_KEY and settings.GEMINI_API_KEY.startswith('AIza') and len(settings.GEMINI_API_KEY) > 20,
+            'huggingface': settings.HF_TOKEN and settings.HF_TOKEN.startswith('hf_') and len(settings.HF_TOKEN) > 20,
+        }
+        
+        for provider, has_valid_key in api_key_checks.items():
+            if has_valid_key and provider in all_providers:
+                available.append(provider)
         
         # Ollamaは常にチェック対象とする（ローカルで動作）
         if 'ollama' in all_providers:
             available.append('ollama')
             
-        # LlamaCppもローカルで動作する可能性がある
-        if 'llamacpp' in all_providers:
+        # LlamaCppもローカルで動作する可能性がある（設定されている場合のみ）
+        if 'llamacpp' in all_providers and settings.LLAMACPP_API_BASE_URL:
             available.append('llamacpp')
             
         return list(set(available))
@@ -100,8 +102,19 @@ class V2ProviderTester:
         """システム情報の収集"""
         print("\n📊 システム情報を収集中...")
         
+        # APIキーの状態チェック
+        api_key_status = {
+            'OpenAI': bool(settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.startswith('sk-')),
+            'Claude': bool(settings.CLAUDE_API_KEY and settings.CLAUDE_API_KEY.startswith('sk-ant-')),
+            'Gemini': bool(settings.GEMINI_API_KEY and settings.GEMINI_API_KEY.startswith('AIza')),
+            'HuggingFace': bool(settings.HF_TOKEN and settings.HF_TOKEN.startswith('hf_')),
+        }
+        
         # Ollama接続チェック
         ollama_connected, ollama_models = await self.check_ollama_connection()
+        
+        # LlamaCpp接続チェック
+        llamacpp_available = bool(settings.LLAMACPP_API_BASE_URL)
         
         self.test_results['system_info'] = {
             'timestamp': time.time(),
@@ -109,15 +122,31 @@ class V2ProviderTester:
             'working_directory': str(project_root),
             'standard_providers': list_providers(),
             'enhanced_providers': list_enhanced_providers(),
+            'api_key_status': api_key_status,
             'ollama_connected': ollama_connected,
             'ollama_models': ollama_models,
+            'llamacpp_configured': llamacpp_available,
             'available_providers': self.available_providers,
         }
         print("✅ システム情報収集完了")
+        
+        # APIキー状態を表示
+        print("🔑 APIキー状態:")
+        for service, has_key in api_key_status.items():
+            status = "✅ 設定済み" if has_key else "❌ 未設定"
+            print(f"   - {service}: {status}")
+        
         if ollama_connected:
             print(f"🦙 Ollama接続: ✅ ({len(ollama_models)}モデル利用可能)")
         else:
             print("🦙 Ollama接続: ❌")
+            
+        if llamacpp_available:
+            print(f"🔥 LlamaCpp設定: ✅ ({settings.LLAMACPP_API_BASE_URL})")
+        else:
+            print("🔥 LlamaCpp設定: ❌")
+        
+        print(f"🎯 テスト可能プロバイダー: {self.available_providers}")
 
     async def check_all_providers_health(self):
         """全プロバイダーの健全性チェック"""
@@ -172,7 +201,16 @@ class V2ProviderTester:
         
         enhanced_v2_providers = list_enhanced_providers().get('v2', [])
         
-        for provider_name in self.providers_to_test:
+        # 利用可能なプロバイダーのみをテスト
+        testable_providers = [p for p in self.providers_to_test if p in self.available_providers]
+        
+        if not testable_providers:
+            print("⚠️ テスト可能なプロバイダーがありません。APIキーの設定またはOllamaの起動を確認してください。")
+            return
+        
+        print(f"🎯 実際にテストするプロバイダー: {testable_providers}")
+        
+        for provider_name in testable_providers:
             if provider_name not in enhanced_v2_providers:
                 print(f"⚠️ {provider_name}: V2拡張が利用できません。スキップします。")
                 continue
@@ -180,7 +218,7 @@ class V2ProviderTester:
             print(f"\n🔍 {provider_name} V2機能テスト開始...")
             provider_results: Dict[str, Any] = {'modes_tested': {}, 'errors': []}
             
-            # Ollamaの場合は接続チェック
+            # プロバイダー固有の事前チェック
             if provider_name == 'ollama':
                 ollama_ok, models = await self.check_ollama_connection()
                 if not ollama_ok:
@@ -193,20 +231,27 @@ class V2ProviderTester:
                     provider_results['errors'].append("Ollamaモデル不在")
                     self.test_results['v2_features'][provider_name] = provider_results
                     continue
+            elif provider_name == 'llamacpp':
+                if not settings.LLAMACPP_API_BASE_URL:
+                    print(f"   ❌ LlamaCpp設定が不完全です。スキップします。")
+                    provider_results['errors'].append("LlamaCpp設定不完全")
+                    self.test_results['v2_features'][provider_name] = provider_results
+                    continue
             
             for mode in self.v2_modes:
                 try:
                     result = await self.test_provider_mode(provider_name, mode)
                     provider_results['modes_tested'][mode] = result
-                    status = "✅ 成功" if result['success'] else f"❌ 失敗: {result.get('error', '不明')}"
+                    status = "✅ 成功" if result['success'] else f"❌ 失敗: {result.get('error', '不明')[:100]}..."
                     print(f"   - {mode}モード: {status}")
                     
                     # 少し待機してサーバーに負荷をかけすぎないようにする
                     await asyncio.sleep(0.5)
                     
                 except Exception as e:
-                    provider_results['errors'].append(f"{mode}モードテスト中にエラー: {e}")
-                    print(f"   - {mode}モード: ⚠️ エラー ({e})")
+                    error_msg = f"{mode}モードテスト中にエラー: {str(e)[:100]}..."
+                    provider_results['errors'].append(error_msg)
+                    print(f"   - {mode}モード: ⚠️ エラー ({str(e)[:50]}...)")
             
             self.test_results['v2_features'][provider_name] = provider_results
 
@@ -257,21 +302,31 @@ class V2ProviderTester:
         """パフォーマンステスト"""
         print("\n⚡ パフォーマンステスト中...")
         
+        # 利用可能なプロバイダーのみをテスト
+        testable_providers = [p for p in self.providers_to_test if p in self.available_providers]
+        
+        if not testable_providers:
+            print("⚠️ パフォーマンステスト可能なプロバイダーがありません。")
+            self.test_results['performance'] = {}
+            return
+        
         # 簡単なパフォーマンステストを実行
         performance_results = {}
         
         # 各プロバイダーで同じプロンプトの実行時間を測定
         test_prompt = "Pythonとは何ですか？簡潔に説明してください。"
         
-        for provider_name in self.providers_to_test:
+        for provider_name in testable_providers:
             if provider_name not in list_enhanced_providers().get('v2', []):
                 continue
                 
-            # Ollamaの接続確認
+            # プロバイダー固有の事前チェック
             if provider_name == 'ollama':
                 ollama_ok, models = await self.check_ollama_connection()
                 if not ollama_ok or not models:
                     continue
+            elif provider_name == 'llamacpp' and not settings.LLAMACPP_API_BASE_URL:
+                continue
             
             try:
                 provider = get_provider(provider_name, enhanced=True)
@@ -304,7 +359,7 @@ class V2ProviderTester:
                     print(f"   {provider_name}: 平均 {performance_results[provider_name]['avg_time']:.2f}秒")
                 
             except Exception as e:
-                print(f"   {provider_name}: パフォーマンステストエラー ({e})")
+                print(f"   {provider_name}: パフォーマンステストエラー ({str(e)[:50]}...)")
         
         self.test_results['performance'] = performance_results
         print("✅ パフォーマンステスト完了")
